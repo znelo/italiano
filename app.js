@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 /* Piano Piano: private Italienisch Lern App. Alles läuft lokal auf dem Gerät. */
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const STORE_KEY = 'pianopiano.v1';
 
 /* ---------- kleine Helfer ---------- */
@@ -86,7 +86,7 @@ const icon = (name, cls = 'ic') => h('span', { class: cls, html: ICONS[name] || 
 /* ---------- Speicher ---------- */
 const defaultSettings = () => ({ goal: 15, sound: 'on', rate: 'normal', voice: '', recall: 'type', fx: true, theme: 'auto' });
 const defaultCbi = () => ({ setup: false, heard: {}, sets: {}, mine: [], recs: [] });
-const defaultState = () => ({ v: 1, created: Date.now(), startDay: null, name: '', settings: defaultSettings(), srs: {}, done: {}, stats: { days: {} }, cbi: defaultCbi(), lastBackup: null, hideInstall: false });
+const defaultState = () => ({ v: 1, created: Date.now(), startDay: null, name: '', settings: defaultSettings(), srs: {}, done: {}, stats: { days: {} }, cbi: defaultCbi(), notes: [], checks: [], lastBackup: null, hideInstall: false });
 function loadState() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
@@ -94,7 +94,7 @@ function loadState() {
       const s = JSON.parse(raw);
       if (s.settings) delete s.settings.voiceMode; // natural voices were removed in 1.2.0
       const d = defaultState();
-      return Object.assign(d, s, { settings: Object.assign(defaultSettings(), s.settings || {}), stats: Object.assign({ days: {} }, s.stats || {}), cbi: Object.assign(defaultCbi(), s.cbi || {}) });
+      return Object.assign(d, s, { settings: Object.assign(defaultSettings(), s.settings || {}), stats: Object.assign({ days: {} }, s.stats || {}), cbi: Object.assign(defaultCbi(), s.cbi || {}), notes: s.notes || [], checks: s.checks || [] });
     }
   } catch (e) { /* leer starten */ }
   return defaultState();
@@ -469,7 +469,8 @@ function startSession(cfg) {
   const root = h('div', { id: 'session' },
     h('div', { class: 's-top' },
       h('button', { class: 'icon-btn', 'aria-label': 'Beenden', html: ICONS.x, onclick: () => confirmExit() }),
-      h('div', { class: 's-progress' }, fill), count),
+      h('div', { class: 's-progress' }, fill), count,
+      h('button', { class: 'chip unclear-btn', 'aria-label': 'Unklar? Notiz speichern', onclick: () => reportUnclear() }, 'Unklar?')),
   );
   const body = h('div', { class: 's-body' });
   const inner = h('div', { class: 's-inner' });
@@ -594,7 +595,7 @@ function finishSession() {
   const correct = firsts.filter(r => r.ok).length;
   const pct = firsts.length ? Math.round(100 * correct / firsts.length) : 100;
   const seconds = Math.round((Date.now() - s.t0) / 1000);
-  const res = { pct, correct, total: firsts.length, seconds };
+  const res = { pct, correct, total: firsts.length, seconds, results: firsts };
   const out = (s.cfg.onComplete && s.cfg.onComplete(res)) || {};
   saveNow();
   s.fill.style.width = '100%';
@@ -960,7 +961,7 @@ Object.assign(CARD_TYPES, {
 
   think(card, ctx) {
     const { it, de, gender, who } = card;
-    ctx.inner.append(h('div', { class: 'q-kicker' }, 'Wie sagst du das? Antworte im Kopf'),
+    ctx.inner.append(h('div', { class: 'q-kicker' }, card.kicker ? `${card.kicker} · Antworte im Kopf` : 'Wie sagst du das? Antworte im Kopf'),
       h('div', { class: 'shadow-card' }, who ? h('div', { class: 'who' }, who) : null, h('div', { class: 'q-de' }, de)),
       h('div', { class: 'q-help' }, 'Formuliere den ganzen Satz im Kopf, dann deck auf.'));
     const reveal = () => {
@@ -998,6 +999,38 @@ function selfRate(ctx) {
 }
 
 function shortDe(de) { return de.split(';')[0].trim(); }
+
+/* ---------- Unklar? Notizen zu einzelnen Karten ---------- */
+function cardRef(card) {
+  if (!card) return { it: '', de: '', where: '' };
+  const it = card.item || (card.items && card.items[0]);
+  const where = it && it.ep ? `CBI ${it.ep}` : it && it.unit ? `Lektion ${it.unit}` : card.ep ? `CBI ${card.ep.id}` : card.unit ? `Lektion ${card.unit.id}` : '';
+  if (it) return { it: it.it, de: it.de, where, id: it.id };
+  if (card.drill) return { it: card.drill.q, de: card.drill.de || '', where };
+  if (card.sentence) return { it: card.sentence.it, de: card.sentence.de, where };
+  if (card.sit) return { it: card.sit.answers[0], de: card.sit.sit, where };
+  if (card.line) return { it: card.line.it, de: card.line.de, where };
+  if (card.ep) return { it: card.ep.grammar ? card.ep.grammar.title : '', de: 'Grammatik', where };
+  if (card.unit) return { it: card.unit.grammar ? card.unit.grammar.title : '', de: 'Grammatik', where };
+  return { it: card.it || '', de: card.de || '', where };
+}
+function reportUnclear() {
+  const s = SESSION; if (!s) return;
+  const ref = cardRef(s.queue[s.pos]);
+  const ta = h('textarea', { class: 'code', placeholder: 'Was ist unklar? Zum Beispiel: klingt anders als im Podcast, verstehe die Regel nicht ...', style: 'min-height:90px' });
+  modal('Unklar?', `${ref.where ? ref.where + ': ' : ''}${ref.it}`, [
+    { label: 'Speichern', cls: 'primary', do: () => { S.notes.push(Object.assign({ d: today(), text: ta.value.trim() }, ref)); save(); toast('Notiz gespeichert. Du findest sie in den Einstellungen.'); } },
+    { label: 'Abbrechen' }], ta);
+  setTimeout(() => ta.focus(), 50);
+}
+function notesText() {
+  return S.notes.map((n, i) => `${i + 1}. ${n.where ? '[' + n.where + '] ' : ''}${n.it}${n.de ? ' = ' + n.de : ''}${n.text ? '\n   Notiz: ' + n.text : ''}`).join('\n');
+}
+async function shareText(text, title) {
+  try { if (navigator.share) { await navigator.share({ title, text }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(text); toast('Kopiert'); return; } catch (e) { /* weiter */ }
+  modal(title, 'Markiere den Text und kopiere ihn.', [{ label: 'Fertig', cls: 'primary' }], h('textarea', { class: 'code', readonly: true }, text));
+}
 
 function mcCard(card, ctx, showIt) {
   const it = card.item;
@@ -1328,6 +1361,100 @@ function episodeSession(e, { replay = false, rec = null } = {}) {
   };
 }
 
+/* 2-Wochen-Check: 10 Podcast-Phrasen der letzten 14 Tage, im Kopf beantworten, selbst bewerten */
+const CHECK_EVERY = 14;
+function checkPool() {
+  const t = today();
+  const recent = learnedIds().map(id => ITEMS[id]).filter(i => i.kind === 'cbi' && S.srs[i.id].added >= t - CHECK_EVERY);
+  return recent.length >= 10 ? recent : learnedIds().map(id => ITEMS[id]).filter(i => i.kind === 'cbi');
+}
+function checkDue() {
+  if (checkPool().length < 10) return false;
+  const last = S.checks[S.checks.length - 1];
+  return !last || last.d <= today() - CHECK_EVERY;
+}
+function checkSession() {
+  const items = sample(checkPool(), 10);
+  return {
+    kind: 'check', title: '2-Wochen-Check',
+    cards: items.map(it => ({ type: 'think', item: it, srs: true, it: it.it, de: it.de, kicker: '2-Wochen-Check' })),
+    onComplete: res => {
+      const r = { d: today(), n: res.results.length, right: 0, almost: 0, wrong: 0 };
+      res.results.forEach(x => { r[x.rating || (x.ok ? 'right' : 'wrong')]++; });
+      S.checks.push(r); save();
+      const prev = S.checks[S.checks.length - 2];
+      return {
+        title: `${r.right} von ${r.n} sicher`,
+        thirdNum: r.almost, thirdLbl: 'fast',
+        text: prev ? `Beim letzten Check waren es ${prev.right} von ${prev.n}. ${r.right > prev.right ? 'Besser geworden!' : r.right === prev.right ? 'Gleich geblieben.' : 'Diesmal weniger. Die wackligen Phrasen kommen jetzt öfter dran.'}` : 'Dein erster Check. In zwei Wochen siehst du, ob es besser wird.',
+      };
+    },
+  };
+}
+
+/* Gesprächszettel: Stoff der letzten 7 Tage für das Telefonat mit einer Muttersprachlerin */
+function recentContent(days = 7) {
+  const t = today();
+  const eps = EPISODES.filter(e => S.cbi.sets[e.id] && (S.cbi.sets[e.id].last || S.cbi.sets[e.id].d) >= t - days);
+  const units = UNITS.filter(u => { const w = WEEKS.find(x => x.kind === 'unit' && x.unit.id === u.id); return UNIT_STEPS.some(st => { const r = S.done[stepKey(w.week, st.k)]; return r && r.d >= t - days; }); });
+  if (!eps.length) eps.push(...EPISODES.filter(e => setDone(e.id)).slice(-2));
+  if (!units.length) { const nx = nextStep(); if (nx && nx.w.kind === 'unit') units.push(nx.w.unit); }
+  return { eps, units };
+}
+function buildSheet() {
+  const { eps, units } = recentContent();
+  const pool = eps.flatMap(e => epItems(e.id)).concat(units.flatMap(u => unitItems(u.id)));
+  const questions = sample(pool.filter(i => /\?$/.test(i.it.trim()) && tokenize(i.it).length >= 2), 5);
+  const sits = units.flatMap(u => (u.speak || []).map(c => ({ sit: c.sit, ans: c.answers[0] })));
+  const roles = [];
+  if (sits.length) roles.push(pick(sits));
+  const e = eps.length ? pick(eps) : null;
+  if (e) roles.push({ sit: `Spielt eine Szene zum Thema „${e.topic}“ (CBI ${e.id}). Sie ist die Italienerin, du der Gast.`, ans: '' });
+  const grammar = [...new Set(eps.filter(x => x.grammar).map(x => x.grammar.title).concat(units.map(u => u.grammar.title)))].slice(0, 4);
+  const lines = [
+    'Gesprächszettel ' + new Date().toLocaleDateString('de-DE'),
+    '',
+    'Für dich (Anleitung):',
+    'Ich lerne Italienisch auf Anfängerniveau. Bitte sprich nur Italienisch, langsam und deutlich. Wenn ich hänge, gib mir ein Stichwort statt der Lösung. Korrigier mich ruhig, am besten indem du meinen Satz richtig wiederholst.',
+    grammar.length ? `Achte besonders auf: ${grammar.join('; ')}.` : '',
+    `Themen diese Woche: ${[...units.map(u => u.titleDe), ...eps.map(x => x.topic)].join(', ')}.`,
+    '',
+    'Fragen fürs Gespräch (mal fragst du, mal ich):',
+    ...questions.map((q, i) => `${i + 1}. ${q.it}  (${shortDe(q.de)})`),
+    '',
+    'Rollenspiele:',
+    ...roles.map((r, i) => `${String.fromCharCode(65 + i)}) ${r.sit}${r.ans ? '\n   Zum Beispiel: ' + r.ans : ''}`),
+  ];
+  return lines.filter((l, i) => !(l === '' && lines[i - 1] === '')).join('\n');
+}
+function showSheet() {
+  const text = buildSheet();
+  const pre = h('pre', { class: 'sheet' }, text);
+  modal('Gesprächszettel', 'Aus dem Stoff der letzten 7 Tage. Schick ihn deiner Kollegin vor dem Telefonat.', [
+    { label: 'Teilen oder kopieren', cls: 'primary', keep: true, do: () => shareText(pre.textContent, 'Gesprächszettel') },
+    { label: 'Neu mischen', keep: true, do: () => { pre.textContent = buildSheet(); } },
+    { label: 'Schließen' }], pre);
+}
+function extrasCard() {
+  const due = checkDue();
+  return h('div', { class: 'practice-grid', style: 'margin-top:4px' },
+    h('button', { class: 'pcard', onclick: showSheet }, icon('chat'), h('div', { class: 't' }, 'Gesprächszettel'), h('div', { class: 's' }, 'Für das Telefonat mit deiner Kollegin')),
+    h('button', { class: 'pcard', disabled: checkPool().length < 10, onclick: () => startSession(checkSession()) }, icon('target'), h('div', { class: 't' }, '2-Wochen-Check'), h('div', { class: 's' }, due ? 'Jetzt fällig, 3 Minuten' : checkPool().length < 10 ? 'Ab 10 Podcast-Phrasen' : 'Freiwillig, jederzeit')));
+}
+function checkHistory() {
+  if (!S.checks.length) return null;
+  const list = h('div', { class: 'card' }, h('h2', null, 'Dein 2-Wochen-Check'));
+  S.checks.slice(-6).forEach(c => {
+    const pct = x => `${Math.round(100 * x / Math.max(1, c.n))}%`;
+    list.append(h('div', { class: 'check-row' },
+      h('div', { class: 'small muted', style: 'width:64px' }, new Date(c.d * 864e5).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })),
+      h('div', { class: 'check-bar' }, h('span', { class: 'r', style: `width:${pct(c.right)}` }), h('span', { class: 'a', style: `width:${pct(c.almost)}` }), h('span', { class: 'w', style: `width:${pct(c.wrong)}` })),
+      h('div', { class: 'small', style: 'width:48px;text-align:right' }, `${c.right}/${c.n}`)));
+  });
+  list.append(h('p', { class: 'small muted', style: 'margin:8px 0 0' }, 'Grün sicher, gelb fast, rot falsch.'));
+  return list;
+}
+
 /* Tägliche Wiederholung */
 function reviewSession({ then } = {}) {
   const ids = dueIds().slice(0, reviewCap());
@@ -1352,6 +1479,7 @@ function todayQueue() {
   const cu = cbiCatchUpToday();
   if (cu) q.push({ label: `Nachholen: CBI ${cu.id}`, sub: cu.topic, run: () => episodeSession(cu) });
   const nx = nextStep();
+  if (checkDue()) q.push({ label: '2-Wochen-Check', sub: '10 Podcast-Phrasen, 3 Minuten', run: () => checkSession() });
   if (nx) q.push({ label: stepTitle(nx.st, nx.w), sub: nx.st.sub(nx.w), run: () => { startStep(nx.w, nx.st, true); return null; } });
   return q;
 }
@@ -1601,6 +1729,8 @@ function viewCbi() {
   if (!S.cbi.setup) { wrap.append(cbiSetup()); return wrap; }
   const pc = podcastCard(); if (pc) wrap.append(pc);
   recCards().forEach(c => wrap.append(c));
+  wrap.append(extrasCard());
+  const ch = checkHistory(); if (ch) wrap.append(ch);
   const cu = catchUpList();
   if (cu.length) {
     wrap.append(h('div', { class: 'section-title' }, `Nachholen (${cu.length})`));
@@ -1770,7 +1900,8 @@ function viewPractice() {
     card('puzzle', 'Sätze bauen', 'Ganze Sätze legen', 'build', units.length > 0),
     card('scale', 'Grammatik', grDone ? `Aus ${grDone} ${grDone === 1 ? 'Lektion' : 'Lektionen'}` : 'Nach der ersten Grammatik', 'grammar', grDone > 0),
     card('chat', 'Im Kopf antworten', 'Sätze und Situationen durchdenken', 'speak', true),
-    card('quote', 'Alltagssprache', spokenLearned ? `${spokenLearned} Ausdrücke wie Italiener sie sagen` : 'Nach der ersten Alltagslektion', 'spoken', spokenLearned >= 4)));
+    card('quote', 'Alltagssprache', spokenLearned ? `${spokenLearned} Ausdrücke wie Italiener sie sagen` : 'Nach der ersten Alltagslektion', 'spoken', spokenLearned >= 4),
+    h('button', { class: 'pcard', onclick: showSheet }, icon('share'), h('div', { class: 't' }, 'Gesprächszettel'), h('div', { class: 's' }, 'Für das Telefonat'))));
   if (units.length) {
     wrap.append(h('div', { class: 'section-title' }, 'Dialoge anhören'));
     const list = h('div', { class: 'wordlist' });
@@ -1860,6 +1991,17 @@ function viewSettings() {
       { label: 'Abbrechen' }]) }, 'Anpassen'))));
   wrap.append(h('p', { class: 'set-note' }, 'Anpassen richtet den Plan so aus, dass du genau in deiner aktuellen Woche bist.'));
 
+  wrap.append(h('div', { class: 'section-title' }, `Unklare Karten (${S.notes.length})`));
+  if (S.notes.length) {
+    const list = h('div', { class: 'wordlist' });
+    S.notes.forEach((n, i) => list.append(h('div', { class: 'wrow' },
+      h('div', { class: 'body' }, h('div', { class: 'w-it' }, n.it), h('div', { class: 'w-de' }, `${n.where ? n.where + ' · ' : ''}${n.text || 'ohne Notiz'}`)),
+      h('button', { class: 'icon-btn', 'aria-label': 'Erledigt', html: ICONS.x, onclick: () => { S.notes.splice(i, 1); save(); render(); } }))));
+    wrap.append(list);
+    wrap.append(h('button', { class: 'btn secondary', style: 'margin-top:10px', onclick: () => shareText(notesText(), 'Unklare Karten') }, 'Liste teilen oder kopieren'));
+  }
+  wrap.append(h('p', { class: 'set-note' }, 'Hier landet alles, was du in einer Übung mit „Unklar?“ markiert hast. Gib mir die Liste in einer späteren Session, dann prüfe ich die Karten.'));
+
   wrap.append(h('div', { class: 'section-title' }, 'Sicherung'));
   wrap.append(h('div', { class: 'set-group' },
     h('button', { class: 'set-row', style: 'width:100%;text-align:left', onclick: shareBackup }, h('div', { class: 'l' }, 'Sicherung speichern', h('small', null, S.lastBackup ? `Letzte Sicherung am ${new Date(S.lastBackup * 864e5).toLocaleDateString('de-DE')}` : 'Noch keine Sicherung')), h('span', { class: 'chev', html: ICONS.share })),
@@ -1900,7 +2042,7 @@ function importBackup() {
         const o = JSON.parse(ta.value.trim());
         if (!o || o.app !== 'pianopiano' || !o.state) throw new Error('x');
         const d = defaultState();
-        S = Object.assign(d, o.state, { settings: Object.assign(defaultSettings(), o.state.settings || {}), stats: Object.assign({ days: {} }, o.state.stats || {}), cbi: Object.assign(defaultCbi(), o.state.cbi || {}) });
+        S = Object.assign(d, o.state, { settings: Object.assign(defaultSettings(), o.state.settings || {}), stats: Object.assign({ days: {} }, o.state.stats || {}), cbi: Object.assign(defaultCbi(), o.state.cbi || {}), notes: o.state.notes || [], checks: o.state.checks || [] });
         syncMine();
         saveNow();
         document.querySelectorAll('.modal-bg').forEach(m => m.remove());

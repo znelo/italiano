@@ -423,3 +423,8 @@ textarea.code { width: 100%; min-height: 120px; border-radius: 14px; border: 1px
 .w-book { font-size: 13px; color: var(--ink-3); margin-top: 1px; }
 .shadow-card { background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); padding: 18px; margin-top: 6px; }
 .shadow-card .who { font-size: 12px; font-weight: 700; color: var(--ink-3); letter-spacing: .03em; margin-bottom: 4px; }
+.unclear-btn { margin-left: 8px; padding: 6px 10px; font-size: 13px; min-height: 0; }
+.sheet { white-space: pre-wrap; font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface); border-radius: 12px; padding: 12px; max-height: 50vh; overflow: auto; margin: 0 0 14px; }
+.check-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.check-bar { flex: 1; display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--line); }
+.check-bar .r { background: var(--good); } .check-bar .a { background: var(--gold); } .check-bar .w { background: var(--bad); }

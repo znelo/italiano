@@ -1,5 +1,5 @@
 /* Service Worker: hält die App offline verfügbar */
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const CACHE = 'pianopiano-' + VERSION;
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'course.js', 'cbi.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
