@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 /* Piano Piano: private Italienisch Lern App. Alles läuft lokal auf dem Gerät. */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const STORE_KEY = 'pianopiano.v1';
 
 /* ---------- kleine Helfer ---------- */
@@ -85,7 +85,8 @@ const icon = (name, cls = 'ic') => h('span', { class: cls, html: ICONS[name] || 
 
 /* ---------- Speicher ---------- */
 const defaultSettings = () => ({ goal: 15, sound: 'on', rate: 'normal', voice: '', recall: 'type', fx: true, theme: 'auto' });
-const defaultState = () => ({ v: 1, created: Date.now(), startDay: null, name: '', settings: defaultSettings(), srs: {}, done: {}, stats: { days: {} }, lastBackup: null, hideInstall: false });
+const defaultCbi = () => ({ setup: false, heard: {}, sets: {}, mine: [], recs: [] });
+const defaultState = () => ({ v: 1, created: Date.now(), startDay: null, name: '', settings: defaultSettings(), srs: {}, done: {}, stats: { days: {} }, cbi: defaultCbi(), lastBackup: null, hideInstall: false });
 function loadState() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
@@ -93,7 +94,7 @@ function loadState() {
       const s = JSON.parse(raw);
       if (s.settings) delete s.settings.voiceMode; // natural voices were removed in 1.2.0
       const d = defaultState();
-      return Object.assign(d, s, { settings: Object.assign(defaultSettings(), s.settings || {}), stats: Object.assign({ days: {} }, s.stats || {}) });
+      return Object.assign(d, s, { settings: Object.assign(defaultSettings(), s.settings || {}), stats: Object.assign({ days: {} }, s.stats || {}), cbi: Object.assign(defaultCbi(), s.cbi || {}) });
     }
   } catch (e) { /* leer starten */ }
   return defaultState();
@@ -126,6 +127,78 @@ UNITS.forEach(u => {
   });
 });
 const spokenItems = uid => ITEM_LIST.filter(i => i.unit === uid && i.kind === 'spoken');
+
+/* ---------- Coffee Break Italian Begleiter ---------- */
+const EPISODES = (window.CBI && window.CBI.episodes) || [];
+const epById = id => EPISODES.find(e => e.id === id);
+const hasSet = e => !!(e && e.phrases && e.phrases.length);
+EPISODES.forEach(e => (e.phrases || []).forEach((v, i) => {
+  const it = Object.assign({ id: `c${e.id}_${i}`, ep: e.id, idx: i, kind: 'cbi' }, v);
+  ITEMS[it.id] = it; ITEM_LIST.push(it);
+}));
+/* Eigene Phrasen aus einer Folge: id m<n>, sie laufen in der normalen Wiederholung mit */
+function registerMine(m) {
+  const it = { id: `m${m.n}`, ep: m.ep, idx: 1000 + m.n, kind: 'cbi', mine: true, it: m.it, de: m.de, alt: [], note: '' };
+  ITEMS[it.id] = it; ITEM_LIST.push(it);
+  return it;
+}
+function syncMine() { (S.cbi.mine || []).forEach(m => { if (!ITEMS[`m${m.n}`]) registerMine(m); }); }
+syncMine();
+const epItems = id => ITEM_LIST.filter(i => i.ep === id);
+const isHeard = id => !!S.cbi.heard[id];
+const setDone = id => !!S.cbi.sets[id];
+const isLearnEp = e => !e.skip && !e.review;
+const nextEpisode = () => EPISODES.find(e => !e.skip && !isHeard(e.id)) || null;
+const weekStart = (t = today()) => t - ((weekdayOf(t) + 6) % 7);
+const paceTarget = e => (e && e.season >= 2) ? 3 : 4;
+const newHeardThisWeek = () => Object.values(S.cbi.heard).filter(x => !x.prior && x.d >= weekStart()).length;
+/* Gehört, aber Set noch offen (älteste zuerst) */
+function cbiPending() {
+  return EPISODES.find(e => hasSet(e) && isHeard(e.id) && !S.cbi.heard[e.id].prior && !setDone(e.id)) || null;
+}
+/* Nachholen: höchstens ein Set pro Wochentag */
+const catchUpList = () => EPISODES.filter(e => e.catchUp && hasSet(e) && isHeard(e.id) && S.cbi.heard[e.id].prior && !setDone(e.id));
+function cbiCatchUpToday() {
+  if (isWeekend()) return null;
+  if (Object.values(S.cbi.sets).some(x => x.d === today() && x.catchUp)) return null;
+  return catchUpList()[0] || null;
+}
+function markHeard(e) {
+  if (!isHeard(e.id)) { S.cbi.heard[e.id] = { d: today() }; save(); }
+}
+/* Empfehlungen zum Nochmal-Hören: höchstens 2 pro Woche, dieselbe Folge frühestens nach 14 Tagen wieder */
+function addRec(ep, why, weekly) {
+  const t = today(), recs = S.cbi.recs;
+  if (recs.filter(r => r.d >= weekStart(t)).length >= 2) return false;
+  if (recs.some(r => r.ep === ep && r.d > t - 14)) return false;
+  recs.push({ ep, d: t, why, weekly: !!weekly });
+  save();
+  return true;
+}
+function epWeakness(e) {
+  const its = epItems(e.id).filter(i => S.srs[i.id]);
+  if (!its.length) return 0;
+  return its.reduce((a, i) => a + (8 - S.srs[i.id].b) + (S.srs[i.id].wrong || 0), 0) / its.length;
+}
+function cbiRecommendations() {
+  const t = today();
+  const done = EPISODES.filter(e => isHeard(e.id) && setDone(e.id));
+  const gaps = done.map(e => ({ e, n: epItems(e.id).filter(i => S.srs[i.id] && S.srs[i.id].lastWrong >= t - 14 && S.srs[i.id].b <= 3).length }))
+    .filter(x => x.n >= 3).sort((a, b) => b.n - a.n);
+  if (gaps.length) addRec(gaps[0].e.id, `${gaps[0].n} Phrasen aus dieser Folge hast du in den letzten zwei Wochen vergessen.`);
+  if (weekdayOf(t) >= 5 || weekdayOf(t) === 0) {
+    if (!S.cbi.recs.some(r => r.weekly && r.d >= weekStart(t)) && done.length) {
+      const weakest = done.slice().sort((a, b) => epWeakness(b) - epWeakness(a))[0];
+      addRec(weakest.id, 'Deine Wochen-Wiederholung: Diese Folge sitzt von allen gehörten am wenigsten.', true);
+    }
+  }
+  return S.cbi.recs.filter(r => !r.done && r.d > t - 14);
+}
+function recAfterTest(unitId, pct) {
+  if (pct >= 75) return;
+  const e = EPISODES.find(x => isHeard(x.id) && hasSet(x) && (x.units || []).includes(unitId));
+  if (e) addRec(e.id, `Im Wochentest zu Lektion ${unitId} hattest du ${pct} Prozent. Die Folge behandelt dasselbe Thema.`);
+}
 const wordItems = uid => ITEM_LIST.filter(i => i.unit === uid && i.kind === 'word');
 const unitItems = uid => ITEM_LIST.filter(i => i.unit === uid);
 
@@ -203,6 +276,7 @@ function srsAnswer(id, correct) {
     if (it.due <= t) { it.b = Math.min(it.b + 1, 8); it.due = t + IV[it.b]; }
   } else {
     it.wrong = (it.wrong || 0) + 1;
+    it.lastWrong = t;
     it.b = Math.max(1, it.b - 2);
     it.due = t;
   }
@@ -561,7 +635,7 @@ function category(it) {
 }
 const coreDe = d => normalize(d).replace(/^(der|die|das|ein|eine)\s+/, '').split(/[ ;]/)[0];
 function distractors(item, n, field) {
-  const pools = [unitItems(item.unit), unitItems(item.unit - 1), unitItems(item.unit + 1), ITEM_LIST];
+  const pools = item.ep ? [epItems(item.ep), ITEM_LIST.filter(i => i.kind === 'cbi'), ITEM_LIST] : [unitItems(item.unit), unitItems(item.unit - 1), unitItems(item.unit + 1), ITEM_LIST];
   const out = [];
   const seen = new Set([normalize(item[field])]);
   const seenCore = new Set([coreDe(item.de)]);
@@ -797,6 +871,11 @@ const CARD_TYPES = {
     input.focus();
   },
 
+  cbi_explain(card, ctx) {
+    ctx.inner.append(epGrammarView(card.ep));
+    ctx.foot(h('button', { class: 'btn primary', onclick: ctx.next }, 'Zu den Phrasen'));
+  },
+
   explain(card, ctx) {
     ctx.inner.append(grammarView(card.unit));
     ctx.foot(h('button', { class: 'btn primary', onclick: ctx.next }, card.cta || 'Zu den Übungen'));
@@ -939,9 +1018,15 @@ function mcCard(card, ctx, showIt) {
 }
 
 /* ---------- Grammatik und Dialog Ansichten (auch außerhalb der Sitzung) ---------- */
-function grammarView(u) {
-  const g = u.grammar;
-  const wrap = h('div', { class: 'explain' }, h('div', { class: 'q-kicker' }, `Grammatik · Lektion ${u.id}`), h('h3', null, g.title));
+function grammarView(u) { return grammarBox(u.grammar, `Grammatik · Lektion ${u.id}`); }
+function epGrammarView(e) {
+  const box = grammarBox(e.grammar, `Grammatik · CBI ${e.id}`);
+  const uw = e.grammar.unit && WEEKS.find(w => w.kind === 'unit' && w.unit.id === e.grammar.unit);
+  if (uw) box.append(h('p', { class: 'q-help' }, `Ausführlich in Lektion ${uw.unit.id} (Woche ${uw.week}). Du darfst jederzeit vorblättern, das ändert nichts an deinem Fortschritt.`));
+  return box;
+}
+function grammarBox(g, kicker) {
+  const wrap = h('div', { class: 'explain' }, h('div', { class: 'q-kicker' }, kicker), h('h3', null, g.title));
   g.points.forEach(p => wrap.append(h('p', { html: p })));
   if (g.table && g.table.rows && g.table.rows.length) {
     const t = h('table', { class: 'gtable' },
@@ -1192,6 +1277,7 @@ function startStep(w, st, chain) {
       if (after) { out.thirdNum = learnedIds().length; out.thirdLbl = 'Wörter gelernt'; out.text = `${newWords || built.items.length} ${st.k === 'pa' ? 'Alltagsausdrücke' : 'neue Wörter'} sind jetzt in deiner Wiederholung. Morgen fragt die App sie wieder ab.`; }
       if (st.k === 'sp') out.text = 'Diese Situationen landen auch auf deinem Gesprächszettel. Am Telefon sagst du sie dann laut.';
       if (isTest) {
+        if (w.kind === 'unit') recAfterTest(w.unit.id, res.pct);
         out.stars = stars;
         out.title = stars === 3 ? 'Eccellente!' : stars === 2 ? 'Molto bene!' : stars === 1 ? 'Bene!' : 'Noch nicht ganz';
         out.text = stars >= 1 ? `${res.pct} Prozent richtig. Die Woche ist geschafft!` : `${res.pct} Prozent richtig. Die Woche zählt trotzdem als erledigt. Wiederhole sie gern noch einmal, wenn du magst.`;
@@ -1201,6 +1287,45 @@ function startStep(w, st, chain) {
       return out;
     },
   });
+}
+
+/* Phrasen-Set einer Podcast-Folge */
+function episodeSession(e, { replay = false, rec = null } = {}) {
+  const items = epItems(e.id);
+  const fresh = items.filter(i => !S.srs[i.id]);
+  const prior = S.cbi.heard[e.id] && S.cbi.heard[e.id].prior;
+  const cards = [];
+  if (e.grammar && !replay && fresh.length) cards.push({ type: 'cbi_explain', ep: e });
+  if (replay || !fresh.length) {
+    cards.push(...vocabMix(shuffle(items).slice(0, 15), { requeue: true }));
+  } else {
+    for (let c = 0; c < fresh.length; c += 4) {
+      const chunk = fresh.slice(c, c + 4);
+      chunk.forEach(it => cards.push({ type: 'intro', item: it, label: `CBI ${e.id}` }));
+      shuffle(chunk).forEach((it, j) => cards.push(j % 2 ? listenOr(it, { requeue: true }) : { type: 'mc_it_de', item: it, requeue: true }));
+    }
+    if (fresh.length >= 4) cards.push({ type: 'match', items: sample(fresh, Math.min(6, fresh.length)) });
+    shuffle(fresh).forEach(it => cards.push(tokenize(it.it).length >= 3
+      ? { type: 'think', requeue: true, it: it.it, de: it.de }
+      : { type: 'mc_de_it', item: it, requeue: true }));
+  }
+  if (e.grammar && e.grammar.drills && !replay) e.grammar.drills.slice(0, 4).forEach(d => cards.push(drillCard(d, { requeue: true })));
+  return {
+    kind: 'cbi', title: `CBI ${e.id}`, cards,
+    onComplete: res => {
+      let n = 0;
+      items.forEach(it => { if (addToSrs(it.id)) n++; });
+      const prev = S.cbi.sets[e.id];
+      S.cbi.sets[e.id] = { d: prev ? prev.d : today(), pct: Math.max(res.pct, prev ? prev.pct : 0), last: today() };
+      if (prior && !prev) S.cbi.sets[e.id].catchUp = true;
+      if (rec) rec.done = today();
+      save();
+      return {
+        thirdNum: n, thirdLbl: n === 1 ? 'neue Phrase' : 'neue Phrasen',
+        text: replay ? 'Folge wiederholt. Was noch wackelt, kommt bald wieder dran.' : `${n} Phrasen aus CBI ${e.id} sind jetzt in deiner Wiederholung.`,
+      };
+    },
+  };
 }
 
 /* Tägliche Wiederholung */
@@ -1217,17 +1342,36 @@ function reviewSession({ then } = {}) {
     },
   };
 }
-function startToday() {
-  if (isWeekend()) {
-    if (dueIds().length) startSession(reviewSession());
-    else toast('Heute ist nichts fällig. Schönes Wochenende!');
-    return;
-  }
+/* Reihenfolge an Wochentagen: Wiederholung, Set der gehörten Folge, ein Nachhol-Set, nächster Lektionsschritt */
+function todayQueue() {
+  const q = [];
+  if (dueIds().length) q.push({ label: 'Wiederholen', sub: `${Math.min(dueIds().length, reviewCap())} Wörter und Phrasen`, run: () => reviewSession() });
+  if (isWeekend()) return q;
+  const pend = cbiPending();
+  if (pend) q.push({ label: `Set zu CBI ${pend.id}`, sub: pend.topic, run: () => episodeSession(pend) });
+  const cu = cbiCatchUpToday();
+  if (cu) q.push({ label: `Nachholen: CBI ${cu.id}`, sub: cu.topic, run: () => episodeSession(cu) });
   const nx = nextStep();
-  const lesson = () => { if (nx) startStep(nx.w, nx.st, true); return null; };
-  if (dueIds().length) startSession(reviewSession({ then: nx ? lesson : null }));
-  else if (nx) startStep(nx.w, nx.st, true);
-  else toast('Du hast den ganzen Kurs geschafft! Übe frei weiter.');
+  if (nx) q.push({ label: stepTitle(nx.st, nx.w), sub: nx.st.sub(nx.w), run: () => { startStep(nx.w, nx.st, true); return null; } });
+  return q;
+}
+function chainThen(cfg, rest) {
+  if (!rest.length) return cfg;
+  const orig = cfg.onComplete;
+  cfg.onComplete = res => {
+    const out = (orig && orig(res)) || {};
+    out.then = () => { const [n, ...r] = rest; const c = n.run(); return c ? chainThen(c, r) : null; };
+    out.thenLabel = `Weiter: ${rest[0].label}`;
+    return out;
+  };
+  return cfg;
+}
+function startToday() {
+  const q = todayQueue();
+  if (!q.length) { toast(isWeekend() ? 'Heute ist nichts fällig. Schönes Wochenende!' : 'Du hast den ganzen Kurs geschafft! Übe frei weiter.'); return; }
+  const [first, ...rest] = q;
+  const cfg = first.run();
+  if (cfg) startSession(chainThen(cfg, rest));
 }
 
 /* Freies Üben */
@@ -1304,14 +1448,14 @@ function render() {
   const bar = $('#tabbar');
   if (!S.startDay) { bar.classList.add('hidden'); app.append(viewWelcome()); return; }
   bar.classList.remove('hidden');
-  const tab = { today: 'today', settings: 'today', course: 'course', week: 'course', grammar: 'course', practice: 'practice', words: 'words' }[VIEW.name] || 'today';
+  const tab = { today: 'today', settings: 'today', course: 'course', week: 'course', grammar: 'course', cbi: 'cbi', episode: 'cbi', practice: 'practice', words: 'words' }[VIEW.name] || 'today';
   bar.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  const fn = { today: viewToday, course: viewCourse, week: viewWeek, grammar: viewGrammar, practice: viewPractice, words: viewWords, settings: viewSettings }[VIEW.name] || viewToday;
+  const fn = { today: viewToday, course: viewCourse, week: viewWeek, grammar: viewGrammar, cbi: viewCbi, episode: viewEpisode, practice: viewPractice, words: viewWords, settings: viewSettings }[VIEW.name] || viewToday;
   app.append(fn(VIEW));
 }
 
 function buildTabbar() {
-  const tabs = [['today', 'Heute', 'home'], ['course', 'Kurs', 'path'], ['practice', 'Üben', 'dumbbell'], ['words', 'Wörter', 'book']];
+  const tabs = [['today', 'Heute', 'home'], ['course', 'Kurs', 'path'], ['cbi', 'Podcast', 'ear'], ['practice', 'Üben', 'dumbbell'], ['words', 'Wörter', 'book']];
   const bar = h('nav', { id: 'tabbar', class: 'tabbar' }, h('div', { class: 'tabbar-inner' },
     tabs.map(([k, label, ic]) => h('button', { class: 'tab', 'data-tab': k, onclick: () => go(k) }, h('span', { html: ICONS[ic] }), label))));
   document.body.append(bar);
@@ -1365,12 +1509,10 @@ function viewToday() {
     hero.append(h('div', { class: 'goal' }, weekGoal(w)));
     hero.append(h('div', { class: 'steps-dots' }, stepsOf(w).map(s2 => h('span', { class: isDone(w.week, s2.k) ? 'done' : (s2 === nx.st ? 'next' : '') }))));
     const todo = h('div', { class: 'todo' });
-    todo.append(h('div', { class: 'todo-item' + (due ? '' : ' done') },
-      h('span', { class: 'check' + (due ? '' : ' on'), html: due ? '' : ICONS.check }),
-      h('div', null, h('div', { class: 't' }, due ? `${Math.min(due, reviewCap())} Wörter wiederholen` : 'Keine Wörter fällig'), h('div', { class: 's' }, due ? 'Damit nichts vergessen wird' : 'Die Wiederholung ist erledigt'))));
-    todo.append(h('div', { class: 'todo-item' },
-      h('span', { class: 'check' }),
-      h('div', null, h('div', { class: 't' }, stepTitle(nx.st, w)), h('div', { class: 's' }, nx.st.sub(w)))));
+    if (!due) todo.append(h('div', { class: 'todo-item done' }, h('span', { class: 'check on', html: ICONS.check }),
+      h('div', null, h('div', { class: 't' }, 'Keine Wörter fällig'), h('div', { class: 's' }, 'Die Wiederholung ist erledigt'))));
+    todayQueue().forEach(x => todo.append(h('div', { class: 'todo-item' }, h('span', { class: 'check' }),
+      h('div', null, h('div', { class: 't' }, x.label), h('div', { class: 's' }, x.sub)))));
     hero.append(todo);
     hero.append(h('button', { class: 'btn primary', onclick: startToday }, h('span', null, mins >= goal ? 'Weiterlernen' : 'Heute lernen')));
     const pw = plannedWeek();
@@ -1382,6 +1524,8 @@ function viewToday() {
       h('button', { class: 'btn primary', onclick: () => practice('due') }, `Wiederholen (${due})`));
   }
   wrap.append(hero);
+  const pc = podcastCard(); if (pc) wrap.append(pc);
+  recCards().forEach(c => wrap.append(c));
 
   const cw = nx ? nx.w : null;
   const cu = cw && cw.kind === 'unit' ? cw.unit : null;
@@ -1389,6 +1533,131 @@ function viewToday() {
   wrap.append(h('div', { class: 'stat-row' },
     h('div', { class: 'stat' }, h('span', { class: 'ic', style: 'color:var(--good)', html: ICONS.book }), h('div', null, h('div', { class: 'num' }, learned), h('div', { class: 'lbl' }, 'Wörter gelernt'))),
     h('div', { class: 'stat' }, h('span', { class: 'ic', style: 'color:var(--gold)', html: ICONS.trophy }), h('div', null, h('div', { class: 'num' }, strongCount()), h('div', { class: 'lbl' }, 'Wörter sitzen fest')))));
+  return wrap;
+}
+
+/* ---------- Podcast: Coffee Break Italian ---------- */
+function startEpisode(e, opts) {
+  if (!hasSet(e)) { toast('Das Set zu dieser Folge kommt bald.'); return; }
+  startSession(episodeSession(e, opts));
+}
+function podcastCard() {
+  if (!EPISODES.length) return null;
+  if (!S.cbi.setup) return h('button', { class: 'card', style: 'display:block;width:100%;text-align:left', onclick: () => go('cbi') },
+    h('h2', null, 'Coffee Break Italian einrichten'), h('p', { class: 'muted', style: 'margin:0' }, 'Sag der App einmal, bei welcher Folge du bist. Danach gibt es zu jeder Folge ein kurzes Set.'));
+  if (isWeekend()) return null;
+  const e = nextEpisode();
+  if (!e) return null;
+  const n = newHeardThisWeek(), target = paceTarget(e);
+  const heardToday = Object.entries(S.cbi.heard).find(([, x]) => !x.prior && x.d === today());
+  const enough = n >= target || !!heardToday;
+  const card = h('div', { class: 'card' },
+    h('div', { class: 'kicker', style: 'color:var(--accent);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.04em' }, heardToday ? 'Podcast morgen' : 'Podcast heute'),
+    h('h2', { style: 'margin:4px 0 2px' }, `CBI ${e.id}`),
+    h('div', { class: 'muted' }, e.topic),
+    h('p', { class: 'small muted', style: 'margin:10px 0 12px' }, heardToday
+      ? `Heute hast du schon CBI ${heardToday[0]} gehört. Eine Folge pro Tag reicht, dann bleibt mehr hängen.`
+      : n >= target
+        ? `Diese Woche schon ${n} neue Folgen gehört, dein Ziel sind ${target}. Lieber eine alte Folge nochmal hören als noch eine neue.`
+        : `Diese Woche: ${n} von ${target} neuen Folgen. Höchstens eine pro Tag.`),
+    h('button', { class: 'btn ' + (enough ? 'secondary' : 'primary'), onclick: () => { markHeard(e); if (hasSet(e)) startEpisode(e); else { toast(`CBI ${e.id} als gehört markiert`); render(); } } }, 'Folge gehört, Set starten'));
+  return card;
+}
+function recCards() {
+  return cbiRecommendations().map(r => {
+    const e = epById(r.ep); if (!e) return null;
+    return h('div', { class: 'card culture' },
+      h('h2', null, `Hör CBI ${e.id} nochmal`),
+      h('p', null, `${e.topic}. ${r.why}`),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn secondary', onclick: () => { r.done = today(); r.skipped = true; save(); render(); } }, 'Später'),
+        h('button', { class: 'btn primary', onclick: () => startEpisode(e, { replay: true, rec: r }) }, 'Gehört, Set wiederholen')));
+  }).filter(Boolean);
+}
+function cbiSetup() {
+  const opts = EPISODES.filter(e => !e.skip);
+  const sel = h('select', { class: 'sel', style: 'width:100%;margin:10px 0 16px' }, opts.map(e => h('option', { value: e.id, selected: e.id === '1-20' }, `CBI ${e.id} · ${e.topic}`)));
+  return h('div', { class: 'card' },
+    h('h2', null, 'Wo stehst du im Podcast?'),
+    h('p', null, 'Welche Folge hörst du als Nächstes? Alle Folgen davor gelten als gehört. Zu den Themen, die nicht schon in deinen Lektionen vorkommen, bekommst du Nachhol-Sets: eins pro Wochentag.'),
+    sel,
+    h('button', { class: 'btn primary', onclick: () => {
+      const idx = EPISODES.findIndex(e => e.id === sel.value);
+      EPISODES.slice(0, idx).forEach(e => { if (!isHeard(e.id)) S.cbi.heard[e.id] = { d: today(), prior: true }; });
+      S.cbi.setup = true; save(); render(); toast('Eingerichtet');
+    } }, 'Speichern'));
+}
+function epRow(e) {
+  const heard = isHeard(e.id), done = setDone(e.id);
+  const status = e.skip ? 'ohne Set' : e.covered ? 'steckt in Lektion ' + e.units.join(' und ') : e.review ? 'Wiederholungsfolge' : done ? `Set erledigt · ${S.cbi.sets[e.id].pct} %` : heard ? (hasSet(e) ? (S.cbi.heard[e.id].prior ? 'zum Nachholen' : 'gehört, Set offen') : 'gehört, Set kommt bald') : (hasSet(e) ? '' : 'Set kommt bald');
+  return h('button', { class: 'wrow', onclick: () => go({ name: 'episode', id: e.id }) },
+    h('span', { class: 'spk', html: done ? ICONS.check : heard ? ICONS.ear : '' }),
+    h('div', { class: 'body' }, h('div', { class: 'w-it' }, `CBI ${e.id}`), h('div', { class: 'w-de' }, e.topic), status ? h('div', { class: 'w-book' }, status) : null),
+    h('span', { class: 'chev', html: ICONS.chevR }));
+}
+function viewCbi() {
+  const wrap = h('div');
+  wrap.append(h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Podcast'), h('div', { class: 'sub' }, 'Coffee Break Italian, Folge für Folge'))));
+  if (!S.cbi.setup) { wrap.append(cbiSetup()); return wrap; }
+  const pc = podcastCard(); if (pc) wrap.append(pc);
+  recCards().forEach(c => wrap.append(c));
+  const cu = catchUpList();
+  if (cu.length) {
+    wrap.append(h('div', { class: 'section-title' }, `Nachholen (${cu.length})`));
+    wrap.append(h('p', { class: 'small muted', style: 'margin:0 4px 8px' }, 'Eins pro Wochentag kommt automatisch unter Heute. Du kannst auch eins vorziehen.'));
+    const list = h('div', { class: 'wordlist' }); cu.forEach(e => list.append(epRow(e))); wrap.append(list);
+  }
+  [...new Set(EPISODES.map(e => e.season))].forEach(sn => {
+    wrap.append(h('div', { class: 'section-title' }, `Staffel ${sn}`));
+    const list = h('div', { class: 'wordlist' });
+    EPISODES.filter(e => e.season === sn).forEach(e => list.append(epRow(e)));
+    wrap.append(list);
+  });
+  return wrap;
+}
+function viewEpisode(v) {
+  const e = epById(v.id);
+  const wrap = h('div');
+  wrap.append(h('button', { class: 'back', onclick: () => go('cbi') }, h('span', { html: ICONS.chevL }), 'Podcast'));
+  if (!e) return wrap;
+  wrap.append(h('div', { class: 'page-head' }, h('div', null,
+    h('div', { class: 'q-kicker', style: 'margin:0 0 4px;color:var(--accent)' }, `Staffel ${e.season} · Folge ${e.n}`),
+    h('h1', null, `CBI ${e.id}`), h('div', { class: 'sub' }, e.topic))));
+  const btns = h('div', { class: 'btn-col', style: 'margin-bottom:16px' });
+  if (!isHeard(e.id) && !e.skip) btns.append(h('button', { class: 'btn ' + (hasSet(e) ? 'secondary' : 'primary'), onclick: () => { markHeard(e); render(); } }, 'Als gehört markieren'));
+  if (hasSet(e)) btns.append(h('button', { class: 'btn primary', onclick: () => { markHeard(e); startEpisode(e, { replay: setDone(e.id) }); } }, setDone(e.id) ? 'Set wiederholen' : 'Set starten'));
+  if (e.covered) wrap.append(h('p', { class: 'intro-text' }, `Die Phrasen dieser Folge lernst du schon in Lektion ${e.units.join(' und ')}. Deshalb gibt es kein eigenes Set.`));
+  if (e.review) wrap.append(h('p', { class: 'intro-text' }, 'Eine Wiederholungsfolge. Hör sie ruhig nochmal, wenn dir die letzten Folgen viel waren.'));
+  wrap.append(btns);
+  if (e.grammar) wrap.append(epGrammarView(e));
+  const its = epItems(e.id).filter(i => !i.mine);
+  if (its.length) { wrap.append(h('div', { class: 'section-title' }, `Phrasen (${its.length})`)); wrap.append(wordList(its, true)); }
+  if (!e.skip) {
+    wrap.append(h('div', { class: 'section-title' }, 'Meine Phrasen aus der Folge'));
+    const mine = epItems(e.id).filter(i => i.mine);
+    if (mine.length) {
+      const list = h('div', { class: 'wordlist' });
+      mine.forEach(it => list.append(h('div', { class: 'wrow' },
+        h('button', { class: 'spk', html: ICONS.speaker, onclick: () => speak(it.it) }),
+        h('div', { class: 'body' }, h('div', { class: 'w-it' }, it.it), h('div', { class: 'w-de' }, it.de)),
+        h('button', { class: 'icon-btn', 'aria-label': 'Löschen', html: ICONS.x, onclick: () => modal('Phrase löschen?', it.it, [
+          { label: 'Löschen', cls: 'bad', do: () => { S.cbi.mine = S.cbi.mine.filter(m => `m${m.n}` !== it.id); delete S.srs[it.id]; delete ITEMS[it.id]; const k = ITEM_LIST.indexOf(it); if (k >= 0) ITEM_LIST.splice(k, 1); save(); render(); } },
+          { label: 'Abbrechen', cls: 'primary' }]) }))));
+      wrap.append(list);
+    }
+    const inIt = h('input', { class: 'type-input', type: 'text', placeholder: 'Italienisch', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
+    const inDe = h('input', { class: 'type-input', type: 'text', placeholder: 'Deutsch', style: 'margin-top:8px' });
+    wrap.append(h('div', { class: 'card' },
+      h('p', { class: 'small muted', style: 'margin-top:0' }, 'Was ist dir in der Folge aufgefallen? Trag es hier ein, dann kommt es in deine Wiederholung.'),
+      inIt, accentBar(inIt), inDe,
+      h('button', { class: 'btn primary', style: 'margin-top:10px', onclick: () => {
+        const it = inIt.value.trim(), de = inDe.value.trim();
+        if (!it || !de) { toast('Bitte Italienisch und Deutsch eintragen.'); return; }
+        const n = S.cbi.mine.reduce((a, m) => Math.max(a, m.n), 0) + 1;
+        const m = { n, ep: e.id, it, de, d: today() };
+        S.cbi.mine.push(m); registerMine(m); addToSrs(`m${n}`); save(); render(); toast('Gespeichert');
+      } }, 'Hinzufügen')));
+  }
   return wrap;
 }
 
@@ -1524,7 +1793,7 @@ function viewWords(v) {
   wrap.append(h('div', { class: 'search' }, input));
   const chips = h('div', { class: 'chips' });
   const listBox = h('div');
-  const filters = [['learned', 'Gelernt'], ['spoken', 'Alltag'], ['hard', 'Schwierig'], ['all', 'Alle Wörter']];
+  const filters = [['learned', 'Gelernt'], ['spoken', 'Alltag'], ['cbi', 'Podcast'], ['hard', 'Schwierig'], ['all', 'Alle Wörter']];
   const draw = () => {
     chips.innerHTML = '';
     filters.forEach(([k, l]) => chips.append(h('button', { class: 'chip' + (v.filter === k ? ' on' : ''), onclick: () => { v.filter = k; draw(); } }, l)));
@@ -1532,6 +1801,7 @@ function viewWords(v) {
     let items = ITEM_LIST;
     if (v.filter === 'learned') items = items.filter(i => S.srs[i.id]);
     if (v.filter === 'spoken') items = items.filter(i => i.kind === 'spoken');
+    if (v.filter === 'cbi') items = items.filter(i => i.kind === 'cbi');
     if (v.filter === 'hard') items = items.filter(i => S.srs[i.id] && ((S.srs[i.id].wrong || 0) > 0 || S.srs[i.id].b <= 2));
     if (q) items = items.filter(i => noAccents(normalize(i.it)).includes(q) || noAccents(normalize(i.de)).includes(q) || (i.book && noAccents(normalize(i.book)).includes(q)));
     const shown = items.slice(0, 250);
@@ -1630,7 +1900,8 @@ function importBackup() {
         const o = JSON.parse(ta.value.trim());
         if (!o || o.app !== 'pianopiano' || !o.state) throw new Error('x');
         const d = defaultState();
-        S = Object.assign(d, o.state, { settings: Object.assign(defaultSettings(), o.state.settings || {}), stats: Object.assign({ days: {} }, o.state.stats || {}) });
+        S = Object.assign(d, o.state, { settings: Object.assign(defaultSettings(), o.state.settings || {}), stats: Object.assign({ days: {} }, o.state.stats || {}), cbi: Object.assign(defaultCbi(), o.state.cbi || {}) });
+        syncMine();
         saveNow();
         document.querySelectorAll('.modal-bg').forEach(m => m.remove());
         go('today'); toast('Sicherung eingespielt');
@@ -1744,7 +2015,24 @@ window.__ppCheckAll = () => {
     }
     if (SESSION) closeSession(true);
   }
+  for (const e of EPISODES.filter(hasSet)) {
+    for (const replay of [false, true]) {
+      startSession(episodeSession(e, { replay }));
+      const s = SESSION;
+      while (s && s.pos < s.queue.length) {
+        const c = s.queue[s.pos];
+        cards++;
+        if (!s.inner.children.length) problems.push(`leer gerendert CBI ${e.id} ${c.type}`);
+        if (c.type === 'type_de_it' && !checkAnswer(c.item.it, [c.item.it, ...(c.item.alt || [])], { articles: true }).ok) problems.push(`type CBI ${c.item.it}`);
+        if ((c.type === 'mc_it_de' || c.type === 'mc_de_it' || c.type === 'listen') && s.inner.querySelectorAll('.opt').length !== 4) problems.push(`mc Optionen CBI ${c.item.it}`);
+        s.pos++;
+        try { renderCard(); } catch (err) { problems.push(`render CBI ${e.id}: ${err.message}`); break; }
+      }
+      if (SESSION) closeSession(true);
+    }
+  }
   S = JSON.parse(savedS);
+  saveNow(); // overwrite anything the test sessions persisted
   stopSpeaking();
   return { cards, problems };
 };
