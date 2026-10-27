@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 /* Piano Piano: private Italienisch Lern App. Alles läuft lokal auf dem Gerät. */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const STORE_KEY = 'pianopiano.v1';
 
 /* ---------- kleine Helfer ---------- */
@@ -39,6 +39,12 @@ const today = () => dayNum();
 const WEEKDAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 const fmtToday = () => { const d = new Date(); return `${WEEKDAYS[d.getDay()]}, ${d.getDate()}. ${MONTHS[d.getMonth()]}`; };
+/* Wochenende: nur kurz wiederholen, kein neuer Stoff. dayNum 0 (1.1.1970) war ein Donnerstag. */
+const weekdayOf = t => (t + 4) % 7;
+const isWeekendDay = t => weekdayOf(t) === 0 || weekdayOf(t) === 6;
+const isWeekend = () => isWeekendDay(today());
+const WEEKEND_CAP = 12;
+const WEEKEND_GOAL = 5;
 
 /* ---------- Icons (inline SVG) ---------- */
 const P = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
@@ -72,20 +78,20 @@ const ICONS = {
   play: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg>`,
   stop: `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`,
   text: `<svg viewBox="0 0 24 24" ${P}><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>`,
-  mic: `<svg viewBox="0 0 24 24" ${P}><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></svg>`,
   quote: `<svg viewBox="0 0 24 24" ${P}><path d="M7 7h4v4c0 3-1.5 5-4 6M15 7h4v4c0 3-1.5 5-4 6"/></svg>`,
   share: `<svg viewBox="0 0 24 24" ${P}><path d="M12 3v13M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>`,
 };
 const icon = (name, cls = 'ic') => h('span', { class: cls, html: ICONS[name] || '' });
 
 /* ---------- Speicher ---------- */
-const defaultSettings = () => ({ goal: 20, sound: 'on', rate: 'normal', voice: '', recall: 'type', fx: true, theme: 'auto', voiceMode: 'natural' });
+const defaultSettings = () => ({ goal: 15, sound: 'on', rate: 'normal', voice: '', recall: 'type', fx: true, theme: 'auto' });
 const defaultState = () => ({ v: 1, created: Date.now(), startDay: null, name: '', settings: defaultSettings(), srs: {}, done: {}, stats: { days: {} }, lastBackup: null, hideInstall: false });
 function loadState() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const s = JSON.parse(raw);
+      if (s.settings) delete s.settings.voiceMode; // natural voices were removed in 1.2.0
       const d = defaultState();
       return Object.assign(d, s, { settings: Object.assign(defaultSettings(), s.settings || {}), stats: Object.assign({ days: {} }, s.stats || {}) });
     }
@@ -149,7 +155,7 @@ const UNIT_STEPS = [
   { k: 'w3', title: 'Wörter 3', sub: () => '12 neue Wörter', ic: 'cards' },
   { k: 'pa', title: 'Alltagssprache', sub: () => 'So sagt man das wirklich', ic: 'quote' },
   { k: 'dl', title: 'Dialog', sub: w => w.unit.dialog.title, ic: 'chat' },
-  { k: 'sp', title: 'Sprechen', sub: () => 'Nachsprechen und frei antworten', ic: 'mic' },
+  { k: 'sp', title: 'Im Kopf antworten', sub: () => 'Sätze und Situationen durchdenken', ic: 'chat' },
   { k: 'ts', title: 'Wochentest', sub: () => '15 Fragen zur ganzen Woche', ic: 'target' },
 ];
 const REVIEW_STEPS = [
@@ -204,7 +210,7 @@ function srsAnswer(id, correct) {
 const learnedIds = () => Object.keys(S.srs).filter(id => ITEMS[id]);
 const dueIds = () => learnedIds().filter(id => S.srs[id].due <= today()).sort((a, b) => (S.srs[a].due - S.srs[b].due) || (S.srs[a].b - S.srs[b].b));
 const strongCount = () => learnedIds().filter(id => S.srs[id].b >= 4).length;
-const reviewCap = () => ({ 10: 15, 20: 25, 30: 40 }[S.settings.goal] || 25);
+const reviewCap = () => isWeekend() ? WEEKEND_CAP : ({ 10: 15, 15: 20, 20: 25, 30: 40 }[S.settings.goal] || 20);
 
 /* ---------- Statistik ---------- */
 function dayStat(t = today()) { return S.stats.days[t] || (S.stats.days[t] = { s: 0, a: 0, c: 0 }); }
@@ -215,7 +221,8 @@ function streak() {
   let t = today();
   if (!ok(t)) t -= 1;
   let n = 0;
-  while (ok(t)) { n++; t--; }
+  // A skipped weekend day does not break the streak, it just does not count
+  while (ok(t) || isWeekendDay(t)) { if (ok(t)) n++; t--; }
   return n;
 }
 const minutesToday = () => Math.round((S.stats.days[today()] || { s: 0 }).s / 60);
@@ -297,86 +304,10 @@ function genderVoice(g) {
 }
 const ttsClean = t => String(t).replace(/\([^)]*\)/g, ' ').replace(/\.\.\.|…/g, ', ').replace(/\//g, ', ').replace(/\s+/g, ' ').trim();
 let speakToken = 0;
-/* Natürliche Stimmen: fertige MP3 Clips, pro Lektion in einem Paket gebündelt (audio_index.js) */
-const AUDIO = window.AUDIO_INDEX || null;
-const SILENT = 'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//OEwAAAAAAAAAAAAEluZm8AAAAPAAAACQAABCAARUVFRUVFRUVFRUVdXV1dXV1dXV1dXXR0dHR0dHR0dHR0i4uLi4uLi4uLi4uioqKioqKioqKiorq6urq6urq6urq60dHR0dHR0dHR0dHo6Ojo6Ojo6Ojo6P//////////////AAAAAExhdmM2MC4zMQAAAAAAAAAAAAAAACQD8AAAAAAAAAQgDeb0IwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//NExAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExFMAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKYAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NExKwAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NExKwAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
-const player = new Audio();
-player.preload = 'auto';
-try { player.preservesPitch = true; player.webkitPreservesPitch = true; } catch (e) { /* egal */ }
-const packCache = new Map();
-function packUrl(i) { return AUDIO.packs[i].f; }
-function getPack(i) {
-  if (packCache.has(i)) { const p = packCache.get(i); packCache.delete(i); packCache.set(i, p); return p; }
-  const p = fetch(packUrl(i)).then(r => { if (!r.ok) throw new Error('pack'); return r.arrayBuffer(); });
-  p.catch(() => packCache.delete(i));
-  packCache.set(i, p);
-  while (packCache.size > 6) packCache.delete(packCache.keys().next().value);
-  return p;
-}
-function clipFor(text, gender) {
-  if (!AUDIO || S.settings.voiceMode === 'device') return null;
-  const c = ttsClean(text);
-  const g = gender || 'f';
-  return AUDIO.map[g + '|' + c] || (g !== 'f' ? AUDIO.map['f|' + c] : null) || null;
-}
-const hasClip = (text, gender) => !!clipFor(text, gender);
-let playerUrl = null;
-function speak(text, opts = {}) {
-  const clip = clipFor(text, opts.gender);
-  if (!clip) return speakDevice(text, opts);
-  const my = ++speakToken;
-  try { TTS && TTS.cancel(); } catch (e) { /* egal */ }
-  try { player.pause(); } catch (e) { /* egal */ }
-  const rate = opts.slow ? 0.72 : (S.settings.rate === 'slow' ? 0.85 : 1);
-  let finished = false;
-  const fin = () => { if (finished) return; finished = true; if (opts.onend && my === speakToken) opts.onend(); };
-  const fallback = () => { if (my === speakToken && !finished) { finished = true; speakDevice(text, opts); } };
-  getPack(clip[0]).then(buf => {
-    if (my !== speakToken) return;
-    const blob = new Blob([buf.slice(clip[1], clip[1] + clip[2])], { type: 'audio/mpeg' });
-    if (playerUrl) URL.revokeObjectURL(playerUrl);
-    playerUrl = URL.createObjectURL(blob);
-    player.onended = fin;
-    player.onerror = fallback;
-    player.src = playerUrl;
-    player.defaultPlaybackRate = rate; player.playbackRate = rate;
-    const pr = player.play();
-    if (pr && pr.catch) pr.catch(fallback);
-  }).catch(fallback);
-}
-function playUrl(url, onend) {
-  const my = ++speakToken;
-  try { TTS && TTS.cancel(); player.pause(); } catch (e) { /* egal */ }
-  player.onended = () => { if (my === speakToken && onend) onend(); };
-  player.onerror = player.onended;
-  player.src = url; player.defaultPlaybackRate = 1; player.playbackRate = 1;
-  const pr = player.play(); if (pr && pr.catch) pr.catch(() => { if (onend) onend(); });
-}
-function unlockAudio() { try { player.src = SILENT; const p = player.play(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* egal */ } }
-async function audioStatus() {
-  if (!AUDIO || !('caches' in window)) return { have: 0, total: AUDIO ? AUDIO.packs.length : 0 };
-  let have = 0;
-  for (let i = 0; i < AUDIO.packs.length; i++) { try { if (await caches.match(packUrl(i), { ignoreSearch: true })) have++; } catch (e) { /* egal */ } }
-  return { have, total: AUDIO.packs.length };
-}
-let audioLoading = false;
-async function preloadAudio(onProgress) {
-  if (!AUDIO || audioLoading || !navigator.onLine) return;
-  audioLoading = true;
-  try {
-    for (let i = 0; i < AUDIO.packs.length; i++) {
-      let cached = false;
-      try { cached = !!(await caches.match(packUrl(i), { ignoreSearch: true })); } catch (e) { /* egal */ }
-      if (!cached) { try { await fetch(packUrl(i)); } catch (e) { break; } }
-      if (onProgress) onProgress(i + 1, AUDIO.packs.length);
-    }
-  } finally { audioLoading = false; }
-}
-function speakDevice(text, { slow = false, gender = null, onend = null } = {}) {
+function speak(text, { slow = false, gender = null, onend = null } = {}) {
   if (!TTS) { if (onend) onend(); return; }
   try {
     TTS.cancel();
-    try { player.pause(); } catch (e) { /* egal */ }
     const my = ++speakToken;
     const u = new SpeechSynthesisUtterance(ttsClean(text));
     u.lang = 'it-IT';
@@ -391,10 +322,10 @@ function speakDevice(text, { slow = false, gender = null, onend = null } = {}) {
     const fin = () => { if (finished) return; finished = true; if (onend && my === speakToken) onend(); };
     u.onend = fin; u.onerror = fin;
     TTS.speak(u);
-    if (!VOICES.length && !speakDevice.warned && S.settings.voiceMode === 'device') { speakDevice.warned = true; setTimeout(() => { loadVoices(); if (!VOICES.length) toast('Keine italienische Stimme gefunden. Siehe Einstellungen.'); }, 1500); }
+    if (!VOICES.length && !speak.warned) { speak.warned = true; setTimeout(() => { loadVoices(); if (!VOICES.length) toast('Keine italienische Stimme gefunden. Siehe Einstellungen.'); }, 1500); }
   } catch (e) { if (onend) onend(); }
 }
-function stopSpeaking() { speakToken++; try { TTS && TTS.cancel(); } catch (e) { /* egal */ } try { player.pause(); } catch (e) { /* egal */ } }
+function stopSpeaking() { speakToken++; try { TTS && TTS.cancel(); } catch (e) { /* egal */ } }
 const soundOn = () => S.settings.sound === 'on';
 function spkBtn(text, { small = false, slow = false, gender = null } = {}) {
   const b = h('button', { class: 'spk-btn' + (small ? ' small' : ''), 'aria-label': 'Anhören', html: ICONS.speaker });
@@ -547,7 +478,7 @@ function answerCard(card, ok, fb) {
   s.answered = true;
   sessionTick();
   const first = !card._retry;
-  s.results.push({ card, ok, first });
+  s.results.push({ card, ok, first, rating: fb.rating || null });
   const ds = dayStat(); ds.a++; if (ok) ds.c++;
   if (card.item && card.srs && first) srsAnswer(card.item.id, ok);
   if (card.items && card.srs && first) card.items.forEach(i => srsAnswer(i.id, ok));
@@ -948,78 +879,43 @@ Object.assign(CARD_TYPES, {
     ctx.inner.append(box);
   },
 
-  shadow(card, ctx) {
+  think(card, ctx) {
     const { it, de, gender, who } = card;
-    const big = spkBtn(it, { gender });
-    ctx.inner.append(h('div', { class: 'q-kicker' }, 'Hör zu und sprich laut nach'),
-      h('div', { class: 'shadow-card' }, who ? h('div', { class: 'who' }, who) : null, h('div', { class: 'q-mid' }, it), h('div', { class: 'q-help' }, de)),
-      h('div', { class: 'listen-big', style: 'margin:18px 0 8px' }, big, h('button', { class: 'slow', onclick: () => speak(it, { slow: true, gender }) }, 'Langsam')),
-      recorderEl(),
-      h('p', { class: 'small faint', style: 'text-align:center;margin-top:14px' }, 'Tipp: Sprich gleich nach dem Hören nach und achte auf die Satzmelodie, nicht nur auf die Wörter.'));
-    ctx.foot(h('button', { class: 'btn primary', onclick: () => { stopRec(); ctx.next(); } }, 'Weiter'));
-    if (soundOn()) { big.classList.add('playing'); speak(it, { gender, onend: () => big.classList.remove('playing') }); }
+    ctx.inner.append(h('div', { class: 'q-kicker' }, 'Wie sagst du das? Antworte im Kopf'),
+      h('div', { class: 'shadow-card' }, who ? h('div', { class: 'who' }, who) : null, h('div', { class: 'q-de' }, de)),
+      h('div', { class: 'q-help' }, 'Formuliere den ganzen Satz im Kopf, dann deck auf.'));
+    const reveal = () => {
+      ctx.inner.append(h('div', { class: 'flash-reveal' }, h('div', { class: 'q-mid' }, it), spkBtn(it, { gender })));
+      if (soundOn()) speak(it, { gender });
+      ctx.foot(selfRate(ctx));
+    };
+    ctx.foot(h('button', { class: 'btn primary', onclick: reveal }, 'Aufdecken'));
   },
 
   situation(card, ctx) {
     const c = card.sit;
-    ctx.inner.append(h('div', { class: 'q-kicker' }, 'Sag es laut auf Italienisch'),
+    ctx.inner.append(h('div', { class: 'q-kicker' }, 'Was sagst du? Antworte im Kopf'),
       h('div', { class: 'q-de' }, c.sit),
-      h('div', { class: 'q-help' }, 'Antworte frei und laut, so gut du kannst. Danach siehst du, wie Italiener es sagen würden.'),
-      recorderEl());
+      h('div', { class: 'q-help' }, 'Überleg dir eine Antwort auf Italienisch. Danach siehst du, wie Italiener es sagen würden.'));
     const reveal = () => {
-      stopRec();
       const list = h('div', { class: 'ex-list', style: 'margin-top:18px' }, c.answers.map((a, i) => h('button', { class: 'ex-item', onclick: () => speak(a) },
         h('span', { class: 'spk-btn small', html: ICONS.speaker }),
         h('div', null, h('div', { class: 'it' }, a), i === 0 ? h('div', { class: 'de' }, 'am häufigsten') : null))));
       ctx.inner.append(h('div', { class: 'section-title', style: 'margin-left:0' }, 'So sagen es Italiener'), list, c.tip ? h('p', { class: 'q-help', style: 'margin-top:12px' }, c.tip) : null);
       if (soundOn()) speak(c.answers[0]);
-      ctx.foot(h('div', { class: 'btn-row' },
-        h('button', { class: 'btn secondary', onclick: () => ctx.answer(false, { silent: true }) }, 'Übe ich noch'),
-        h('button', { class: 'btn good', onclick: () => ctx.answer(true, { silent: true }) }, 'Hat geklappt')));
+      ctx.foot(selfRate(ctx));
       try { list.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { /* egal */ }
     };
     ctx.foot(h('button', { class: 'btn primary', onclick: reveal }, 'Lösung zeigen'));
   },
 });
 
-/* Aufnahme mit dem Mikrofon (bleibt auf dem Gerät, wird nirgends gespeichert) */
-const REC = { stream: null, rec: null, chunks: [], url: null, el: null };
-const canRecord = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-function stopRec() {
-  try { if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); } catch (e) { /* egal */ }
-  try { if (REC.stream) REC.stream.getTracks().forEach(t => t.stop()); } catch (e) { /* egal */ }
-  REC.stream = null;
-}
-function recorderEl() {
-  if (!canRecord()) return h('p', { class: 'small faint', style: 'text-align:center' }, 'Sprich einfach laut mit.');
-  const wrap = h('div', { class: 'rec' });
-  const recBtn = h('button', { class: 'rec-btn' });
-  const playBtn = h('button', { class: 'btn secondary rec-play hidden' }, icon('play'), 'Meine Aufnahme');
-  const setIdle = () => { recBtn.classList.remove('on'); recBtn.innerHTML = ''; recBtn.append(icon('mic'), h('span', null, REC.url ? 'Nochmal aufnehmen' : 'Aufnehmen')); };
-  const start = async () => {
-    try {
-      stopSpeaking();
-      REC.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'].find(m => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m));
-      REC.rec = new MediaRecorder(REC.stream, mime ? { mimeType: mime } : undefined);
-      REC.chunks = [];
-      REC.rec.ondataavailable = e => { if (e.data && e.data.size) REC.chunks.push(e.data); };
-      REC.rec.onstop = () => {
-        try { REC.stream && REC.stream.getTracks().forEach(t => t.stop()); } catch (e) { /* egal */ }
-        if (REC.url) URL.revokeObjectURL(REC.url);
-        REC.url = REC.chunks.length ? URL.createObjectURL(new Blob(REC.chunks, { type: REC.rec.mimeType || 'audio/mp4' })) : null;
-        if (wrap.isConnected) { setIdle(); playBtn.classList.toggle('hidden', !REC.url); if (REC.url) playUrl(REC.url); }
-      };
-      REC.rec.start();
-      recBtn.classList.add('on'); recBtn.innerHTML = ''; recBtn.append(icon('stop'), h('span', null, 'Stopp'));
-    } catch (e) { toast('Mikrofon nicht verfügbar. Sprich einfach laut mit.'); setIdle(); }
-  };
-  recBtn.onclick = () => { if (REC.rec && REC.rec.state === 'recording') REC.rec.stop(); else start(); };
-  playBtn.onclick = () => { if (REC.url) playUrl(REC.url); };
-  if (REC.url) { URL.revokeObjectURL(REC.url); REC.url = null; }
-  setIdle();
-  wrap.append(recBtn, playBtn);
-  return wrap;
+/* Selbst bewerten nach dem Aufdecken: richtig, fast oder falsch. Fast und falsch kommen später noch einmal. */
+function selfRate(ctx) {
+  return h('div', { class: 'btn-row three' },
+    h('button', { class: 'btn bad', onclick: () => ctx.answer(false, { silent: true, rating: 'wrong' }) }, 'Falsch'),
+    h('button', { class: 'btn secondary', onclick: () => ctx.answer(false, { silent: true, rating: 'almost' }) }, 'Fast'),
+    h('button', { class: 'btn good', onclick: () => ctx.answer(true, { silent: true, rating: 'right' }) }, 'Richtig'));
 }
 
 function shortDe(de) { return de.split(';')[0].trim(); }
@@ -1183,19 +1079,19 @@ function lessonParlato(u) {
   shuffle(items).slice(0, 4).forEach(it => cards.push({ type: 'mc_de_it', item: it, requeue: true }));
   return { cards, items };
 }
-function shadowLines(u, n) {
+function thinkLines(u, n) {
   const dl = u.dialog;
   const keys = Object.keys(dl.speakers);
   const meKey = keys.find(k => /lukas/i.test(dl.speakers[k].name)) || 'A';
   const lines = dl.lines.filter(l => { const w = tokenize(l.it).length; return w >= 3 && w <= 12; });
   const mine = lines.filter(l => l.s === meKey);
   const pickL = (mine.length >= n ? sample(mine, n) : mine.concat(sample(lines.filter(l => l.s !== meKey), n - mine.length)));
-  return pickL.map(l => ({ type: 'shadow', it: l.it, de: l.de, gender: (dl.speakers[l.s] || {}).gender || 'f', who: (dl.speakers[l.s] || {}).name }));
+  return pickL.map(l => ({ type: 'think', requeue: true, it: l.it, de: l.de, gender: (dl.speakers[l.s] || {}).gender || 'f', who: (dl.speakers[l.s] || {}).name }));
 }
 function lessonSpeak(u) {
-  const cards = shadowLines(u, 4);
-  sample(u.sentences, 2).forEach(s => cards.push({ type: 'shadow', it: s.it, de: s.de, gender: 'f' }));
-  (u.speak || []).forEach(c => cards.push({ type: 'situation', sit: c }));
+  const cards = thinkLines(u, 4);
+  sample(u.sentences, 2).forEach(s => cards.push({ type: 'think', requeue: true, it: s.it, de: s.de, gender: 'f' }));
+  (u.speak || []).forEach(c => cards.push({ type: 'situation', requeue: true, sit: c }));
   return { cards };
 }
 function lessonTest(u) {
@@ -1294,7 +1190,7 @@ function startStep(w, st, chain) {
       const nx = nextStep();
       const out = {};
       if (after) { out.thirdNum = learnedIds().length; out.thirdLbl = 'Wörter gelernt'; out.text = `${newWords || built.items.length} ${st.k === 'pa' ? 'Alltagsausdrücke' : 'neue Wörter'} sind jetzt in deiner Wiederholung. Morgen fragt die App sie wieder ab.`; }
-      if (st.k === 'sp') out.text = 'Laut sprechen ist der wichtigste Schritt, damit du in Italien wirklich losreden kannst. Brava, bravo!';
+      if (st.k === 'sp') out.text = 'Diese Situationen landen auch auf deinem Gesprächszettel. Am Telefon sagst du sie dann laut.';
       if (isTest) {
         out.stars = stars;
         out.title = stars === 3 ? 'Eccellente!' : stars === 2 ? 'Molto bene!' : stars === 1 ? 'Bene!' : 'Noch nicht ganz';
@@ -1322,6 +1218,11 @@ function reviewSession({ then } = {}) {
   };
 }
 function startToday() {
+  if (isWeekend()) {
+    if (dueIds().length) startSession(reviewSession());
+    else toast('Heute ist nichts fällig. Schönes Wochenende!');
+    return;
+  }
   const nx = nextStep();
   const lesson = () => { if (nx) startStep(nx.w, nx.st, true); return null; };
   if (dueIds().length) startSession(reviewSession({ then: nx ? lesson : null }));
@@ -1361,8 +1262,8 @@ function practice(mode, uid) {
   }
   if (mode === 'speak') {
     const us = units.length ? units : [UNITS[0]];
-    const cards = sample(us.flatMap(u => shadowLines(u, 2)), 4).concat(sample(us.flatMap(u => (u.speak || []).map(c => ({ type: 'situation', sit: c }))), 8));
-    return startSession(Object.assign({}, base, { title: 'Sprechen', cards }));
+    const cards = sample(us.flatMap(u => thinkLines(u, 2)), 4).concat(sample(us.flatMap(u => (u.speak || []).map(c => ({ type: 'situation', sit: c }))), 8));
+    return startSession(Object.assign({}, base, { title: 'Im Kopf antworten', cards }));
   }
   if (mode === 'spoken') {
     const sp = learned.filter(i => i.kind === 'spoken');
@@ -1445,13 +1346,20 @@ function viewToday() {
     wrap.append(h('button', { class: 'banner', style: 'display:block;width:100%;text-align:left', onclick: () => go('settings') },
       h('b', null, 'Sicherung empfohlen. '), 'Dein Fortschritt liegt nur auf diesem iPhone. Speichere ab und zu eine Sicherung in Notizen oder Dateien. Tippe hier.'));
   }
-  const st = streak(), mins = minutesToday(), goal = S.settings.goal;
+  const st = streak(), mins = minutesToday(), weekend = isWeekend(), goal = weekend ? WEEKEND_GOAL : S.settings.goal;
   wrap.append(h('div', { class: 'stat-row' },
     h('div', { class: 'stat' }, h('span', { class: 'ic flame', html: ICONS.flame }), h('div', null, h('div', { class: 'num' }, st), h('div', { class: 'lbl' }, st === 1 ? 'Tag in Folge' : 'Tage in Folge'))),
     h('div', { class: 'stat' }, ring(mins, goal), h('div', null, h('div', { class: 'num' }, `${mins}`), h('div', { class: 'lbl' }, `von ${goal} Min heute`)))));
 
   const hero = h('div', { class: 'card hero' });
-  if (nx) {
+  if (weekend) {
+    hero.append(h('div', { class: 'kicker' }, 'Wochenende'), h('h3', null, 'Nur kurz wiederholen'),
+      h('div', { class: 'goal' }, 'Heute gibt es keinen neuen Stoff. 5 Minuten Wiederholung reichen, und wenn du gar nicht dazu kommst, bleibt deine Serie trotzdem erhalten.'));
+    hero.append(due
+      ? h('button', { class: 'btn primary', onclick: startToday }, h('span', null, `${Math.min(due, reviewCap())} Wörter wiederholen`))
+      : h('div', { class: 'plan-note' }, 'Nichts fällig. Genieß das Wochenende!'));
+    if (nx) hero.append(h('div', { class: 'plan-note' }, `Am Montag geht es weiter mit Woche ${nx.w.week}: ${stepTitle(nx.st, nx.w)}.`));
+  } else if (nx) {
     const w = nx.w;
     hero.append(h('div', { class: 'kicker' }, `Woche ${w.week} von ${TOTAL_WEEKS}`), h('h3', null, weekTitle(w)), h('div', { class: 'muted' }, weekTitleDe(w)));
     hero.append(h('div', { class: 'goal' }, weekGoal(w)));
@@ -1592,7 +1500,7 @@ function viewPractice() {
     card('bolt', 'Zufallsmix', '20 gemischte Fragen', 'mix', learned.length >= 4),
     card('puzzle', 'Sätze bauen', 'Ganze Sätze legen', 'build', units.length > 0),
     card('scale', 'Grammatik', grDone ? `Aus ${grDone} ${grDone === 1 ? 'Lektion' : 'Lektionen'}` : 'Nach der ersten Grammatik', 'grammar', grDone > 0),
-    card('mic', 'Sprechen', 'Nachsprechen und frei antworten', 'speak', true),
+    card('chat', 'Im Kopf antworten', 'Sätze und Situationen durchdenken', 'speak', true),
     card('quote', 'Alltagssprache', spokenLearned ? `${spokenLearned} Ausdrücke wie Italiener sie sagen` : 'Nach der ersten Alltagslektion', 'spoken', spokenLearned >= 4)));
   if (units.length) {
     wrap.append(h('div', { class: 'section-title' }, 'Dialoge anhören'));
@@ -1654,34 +1562,23 @@ function viewSettings() {
 
   wrap.append(h('div', { class: 'section-title' }, 'Lernen'));
   wrap.append(h('div', { class: 'set-group' },
-    setRow('Tagesziel', 'Bestimmt, wie viele Wörter pro Tag wiederholt werden', seg([[10, '10'], [20, '20'], [30, '30']], st.goal, v => { st.goal = v; save(); })),
+    setRow('Tagesziel', 'Minuten pro Wochentag. Am Wochenende reichen 5 Minuten.', seg([[10, '10'], [15, '15'], [20, '20'], [30, '30']], st.goal, v => { st.goal = v; save(); })),
     setRow('Wiederholen per', 'Tippen ist gründlicher, Karteikarte ist schneller', seg([['type', 'Tippen'], ['flash', 'Karte']], st.recall, v => { st.recall = v; save(); }))));
-  wrap.append(h('p', { class: 'set-note' }, 'Tagesziel in Minuten. Bei 20 Minuten schaffst du den Plan von 26 Wochen gut.'));
+  wrap.append(h('p', { class: 'set-note' }, 'Das Tagesziel bestimmt auch, wie viele Wörter pro Tag wiederholt werden. Samstag und Sonntag gibt es keinen neuen Stoff, und ein ausgelassener Wochenendtag unterbricht deine Serie nicht.'));
 
   wrap.append(h('div', { class: 'section-title' }, 'Ton und Stimme'));
-  const natural = !!AUDIO && st.voiceMode !== 'device';
   const voices = VOICES.filter(v => !NOVELTY.test(v.name));
+  const current = mainVoice();
   const sel = h('select', { class: 'sel', onchange: e => { st.voice = e.target.value; save(); speak('Ciao! Come stai?'); } },
     h('option', { value: '' }, 'Automatisch'),
     voices.map(v => h('option', { value: v.voiceURI, selected: st.voice === v.voiceURI }, v.name)));
-  const audioRow = h('div', { class: 'set-row' }, h('div', { class: 'l' }, 'Audio offline', h('small', { id: 'audio-status' }, 'wird geprüft ...')),
-    h('button', { class: 'chip', id: 'audio-load', onclick: () => {
-      if (!navigator.onLine) { toast('Dafür brauchst du kurz Internet.'); return; }
-      const lbl = $('#audio-status');
-      preloadAudio((i, n) => { if (lbl) lbl.textContent = `Lade ${i} von ${n} Paketen ...`; }).then(updateAudioStatus);
-    } }, 'Laden'));
   wrap.append(h('div', { class: 'set-group' },
     setRow('Ton', 'Ohne Ton: keine automatische Aussprache und keine Hörübungen, z. B. in der Bahn ohne Kopfhörer', seg([['on', 'An'], ['off', 'Aus']], st.sound, v => { st.sound = v; save(); })),
-    AUDIO ? setRow('Stimme', natural ? 'Sara und Nicola, natürliche Stimmen fest in der App' : 'Eingebaute Stimme des iPhones', seg([['natural', 'Natürlich'], ['device', 'iPhone']], natural ? 'natural' : 'device', v => { st.voiceMode = v; save(); speak('Buongiorno! Mi chiamo Giulia. Piacere!'); })) : null,
     setRow('Sprechtempo', null, seg([['normal', 'Normal'], ['slow', 'Langsam']], st.rate, v => { st.rate = v; save(); speak('Piano piano si va lontano.'); })),
-    !natural ? setRow('iPhone Stimme', voices.length ? `${voices.length} italienische ${voices.length === 1 ? 'Stimme' : 'Stimmen'} gefunden` : 'Keine italienische Stimme gefunden', sel) : null,
-    setRow('Stimme testen', null, h('button', { class: 'spk-btn small', html: ICONS.speaker, onclick: () => speak('Buongiorno! Mi chiamo Giulia. Piacere!') })),
-    AUDIO && natural ? audioRow : null,
+    setRow('iPhone Stimme', current ? `Gerade aktiv: ${current.name}` : 'Keine italienische Stimme gefunden', sel),
+    setRow('Probe hören', null, h('button', { class: 'spk-btn small', html: ICONS.speaker, onclick: () => speak('Buongiorno! Mi chiamo Giulia. Piacere!') })),
     setRow('Effekt Töne', 'Kurzer Ton bei richtig und falsch', switchEl(st.fx, v => { st.fx = v; save(); }))));
-  wrap.append(h('p', { class: 'set-note' }, natural
-    ? 'Die natürlichen Stimmen sind fest in der App gespeichert und funktionieren offline, sobald alle Audio Pakete geladen sind. Das passiert automatisch, wenn du online bist. Kein Ton? Prüfe Lautstärke und Stummschalter.'
-    : 'Die iPhone Stimme ist im System eingebaut und funktioniert auch offline. Kein Ton? Prüfe Lautstärke und Stummschalter.'));
-  if (AUDIO && natural) setTimeout(updateAudioStatus, 0);
+  wrap.append(h('p', { class: 'set-note' }, 'Die App nutzt die italienische Stimme, die auf dem iPhone vorinstalliert ist. Stimmen, die du selbst nachlädst (z. B. Federica), kann eine Web-App leider nicht sehen. Kein Ton? Prüfe Lautstärke und Stummschalter.'));
 
   wrap.append(h('div', { class: 'section-title' }, 'Darstellung und Profil'));
   const nameIn = h('input', { type: 'text', value: S.name || '', placeholder: 'Optional', style: 'border:0;background:transparent;text-align:right;font-size:17px;outline:none;width:150px', onchange: e => { S.name = e.target.value.trim().slice(0, 30); save(); } });
@@ -1705,13 +1602,6 @@ function viewSettings() {
   return wrap;
 }
 
-async function updateAudioStatus() {
-  const el = $('#audio-status'); if (!el) return;
-  const st = await audioStatus();
-  if (!$('#audio-status')) return;
-  el.textContent = st.have >= st.total ? 'Alle Audio Pakete sind auf dem iPhone' : `${st.have} von ${st.total} Paketen geladen`;
-  const b = $('#audio-load'); if (b) b.classList.toggle('hidden', st.have >= st.total);
-}
 function backupString() { return JSON.stringify({ app: 'pianopiano', v: 1, exported: new Date().toISOString(), state: S }); }
 function markBackup() { S.lastBackup = today(); save(); render(); }
 async function shareBackup() {
@@ -1756,10 +1646,10 @@ function resetAll() {
 
 /* ---------- Willkommen ---------- */
 function viewWelcome() {
-  const v = { goal: 20, sound: 'on', name: '' };
+  const v = { goal: 15, sound: 'on', name: '' };
   const wrap = h('div', { class: 'welcome' });
   const choices = (opts, key) => {
-    const row = h('div', { class: 'choice-row' + (opts.length === 2 ? ' two' : '') });
+    const row = h('div', { class: 'choice-row' + (opts.length === 2 ? ' two' : opts.length === 4 ? ' four' : '') });
     const draw = () => { row.innerHTML = ''; opts.forEach(([val, t, s2]) => row.append(h('button', { class: 'choice' + (v[key] === val ? ' on' : ''), onclick: () => { v[key] = val; draw(); } }, t, s2 ? h('small', null, s2) : null))); };
     draw();
     return row;
@@ -1772,7 +1662,7 @@ function viewWelcome() {
     h('p', { class: 'motto-de' }, 'Schritt für Schritt kommt man weit.'),
     h('div', { class: 'card' }, h('p', { style: 'margin:0' }, 'Dein Italienischkurs in 26 Wochen: von null bis zu einfachen Gesprächen im Urlaub und mit Freunden. Jeden Tag ein kleiner Schritt mit Vokabeln, Hören, Dialogen und kurzer Grammatik. Alles bleibt privat auf deinem iPhone und funktioniert auch offline.')),
     h('div', { class: 'field' }, h('label', null, 'Wie heißt du?'), nameIn),
-    h('div', { class: 'field' }, h('label', null, 'Wie viel Zeit hast du pro Tag?'), choices([[10, '10 Min', 'locker'], [20, '20 Min', 'empfohlen'], [30, '30 Min', 'intensiv']], 'goal')),
+    h('div', { class: 'field' }, h('label', null, 'Wie viel Zeit hast du pro Tag?'), choices([[10, '10 Min', 'locker'], [15, '15 Min', 'empfohlen'], [20, '20 Min', 'mehr'], [30, '30 Min', 'intensiv']], 'goal')),
     h('div', { class: 'field' }, h('label', null, 'Hast du beim Lernen meistens Ton?'), h('div', { class: 'hint' }, 'Kannst du jederzeit in den Einstellungen ändern.'), choices([['on', 'Ja, mit Ton', 'Kopfhörer oder Lautsprecher'], ['off', 'Meist ohne', 'z. B. in der Bahn']], 'sound')),
     h('button', { class: 'btn primary', onclick: () => {
       S.name = v.name.trim().slice(0, 30); S.settings.goal = v.goal; S.settings.sound = v.sound; S.startDay = today(); saveNow();
@@ -1809,12 +1699,11 @@ function init() {
   if (!UNITS.length) { app.append(h('div', { class: 'card' }, 'Die Kursdaten konnten nicht geladen werden. Prüfe, ob die Datei course.js mit hochgeladen wurde.')); return; }
   render();
   initSW();
-  const unlock = () => { unlockAudio(); try { if (TTS) { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; TTS.speak(u); } loadVoices(); } catch (e) { /* egal */ } };
+  const unlock = () => { try { if (TTS) { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; TTS.speak(u); } loadVoices(); } catch (e) { /* egal */ } };
   document.addEventListener('touchend', unlock, { once: true });
   document.addEventListener('click', unlock, { once: true });
   matchMedia('(prefers-color-scheme: dark)').addEventListener && matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
-  window.addEventListener('online', () => { if (VIEW.name === 'settings') render(); setTimeout(() => preloadAudio(), 3000); });
-  if (AUDIO && S.settings.voiceMode !== 'device') setTimeout(() => preloadAudio(), 4000);
+  window.addEventListener('online', () => { if (VIEW.name === 'settings') render(); });
   window.addEventListener('offline', () => VIEW.name === 'settings' && render());
   setTimeout(() => { loadVoices(); if (VIEW.name === 'settings' && !SESSION) render(); }, 1200);
   let lastDay = today();
@@ -1848,10 +1737,8 @@ window.__ppCheckAll = () => {
       if (c.type === 'g_choice' && s.inner.querySelectorAll('.opt').length !== 3) problems.push(`g_choice Optionen ${c.drill.q}`);
       if (c.type === 'book2spoken' && s.inner.querySelectorAll('.opt').length !== 3) problems.push(`book2spoken Optionen ${c.item.it}`);
       if (c.type === 'situation' && !s.inner.querySelector('.q-de')) problems.push(`situation leer ${W.week}`);
-      if (c.type === 'shadow' && !c.it) problems.push(`shadow leer ${W.week}`);
+      if (c.type === 'think' && !c.it) problems.push(`think leer ${W.week}`);
       if (c.type === 'type_de_it' && c.item.kind === 'spoken' && !checkAnswer(c.item.it, [c.item.it, ...(c.item.alt || [])], { articles: true }).ok) problems.push(`type spoken ${c.item.it}`);
-      if (window.AUDIO_INDEX && c.item && !hasClip(c.item.it)) problems.push(`kein Audio: ${c.item.it}`);
-      if (window.AUDIO_INDEX && c.type === 'shadow' && !hasClip(c.it, c.gender)) problems.push(`kein Audio shadow: ${c.it}`);
       s.pos++;
       try { renderCard(); } catch (e) { problems.push(`render ${W.week}.${st.k}: ${e.message}`); break; }
     }

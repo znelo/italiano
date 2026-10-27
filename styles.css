@@ -118,6 +118,7 @@ b, strong { font-weight: 650; }
 .btn-col { display: flex; flex-direction: column; gap: 10px; }
 .btn-row { display: flex; gap: 10px; }
 .btn-row .btn { flex: 1; }
+.btn-row.three .btn { padding-left: 6px; padding-right: 6px; }
 
 /* Tab bar */
 .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent); -webkit-backdrop-filter: saturate(1.4) blur(18px); backdrop-filter: saturate(1.4) blur(18px); border-top: 1px solid var(--line); padding-bottom: var(--safe-b); }
@@ -404,6 +405,7 @@ textarea.code { width: 100%; min-height: 120px; border-radius: 14px; border: 1px
 .field input[type=text] { width: 100%; height: 50px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); padding: 0 14px; font-size: 17px; outline: none; }
 .choice-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .choice-row.two { grid-template-columns: 1fr 1fr; }
+.choice-row.four { grid-template-columns: 1fr 1fr; }
 .choice { padding: 12px 8px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); border: 2px solid transparent; text-align: center; font-weight: 600; line-height: 1.2; }
 .choice small { display: block; font-weight: 450; color: var(--ink-2); font-size: 13px; margin-top: 3px; }
 .choice.on { border-color: var(--accent); background: var(--accent-soft); }
@@ -421,9 +423,3 @@ textarea.code { width: 100%; min-height: 120px; border-radius: 14px; border: 1px
 .w-book { font-size: 13px; color: var(--ink-3); margin-top: 1px; }
 .shadow-card { background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); padding: 18px; margin-top: 6px; }
 .shadow-card .who { font-size: 12px; font-weight: 700; color: var(--ink-3); letter-spacing: .03em; margin-bottom: 4px; }
-.rec { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 14px; }
-.rec-btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 26px; background: var(--surface); box-shadow: var(--shadow); font-weight: 650; color: var(--ink); min-height: 48px; }
-.rec-btn .ic svg { width: 20px; height: 20px; }
-.rec-btn.on { background: var(--bad); color: #fff; animation: pulse 1.2s ease-in-out infinite; }
-.rec-play { width: auto; min-height: 44px; padding: 8px 18px; border-radius: 22px; font-size: 15px; }
-.rec-play .ic svg { width: 16px; height: 16px; }
